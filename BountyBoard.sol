@@ -9,26 +9,23 @@ pragma solidity ^0.8.20;
  */
 contract BountyBoard {
 
-    // ─── Constants ────────────────────────────────────────────────
-    uint256 public constant PLATFORM_FEE_BPS = 250;  // 2.5%
+    uint256 public constant PLATFORM_FEE_BPS = 250;
     uint256 public constant CLAIM_WINDOW     = 7 days;
     uint256 public constant DISPUTE_WINDOW   = 3 days;
 
-    // ─── State types ──────────────────────────────────────────────
     enum BountyStatus { Open, Claimed, UnderReview, Disputed, Completed, Cancelled }
 
     struct Bounty {
         address poster;
         address hunter;
         string  title;
-        string  requirementsHash; // IPFS CID or keccak of requirements doc
+        string  requirementsHash;
         uint256 reward;
         uint256 claimedAt;
         uint256 submittedAt;
         BountyStatus status;
     }
 
-    // ─── Storage ──────────────────────────────────────────────────
     address public immutable platformOwner;
     uint256 public bountyCounter;
     uint256 public platformBalance;
@@ -36,7 +33,6 @@ contract BountyBoard {
     mapping(uint256 => Bounty)  public bounties;
     mapping(address => uint256) public hunterEarnings;
 
-    // ─── Events ───────────────────────────────────────────────────
     event BountyPosted    (uint256 indexed id, address indexed poster, uint256 reward);
     event BountyClaimed   (uint256 indexed id, address indexed hunter);
     event WorkSubmitted   (uint256 indexed id, string proofHash);
@@ -45,7 +41,6 @@ contract BountyBoard {
     event DisputeResolved (uint256 indexed id, bool hunterWon);
     event BountyCancelled (uint256 indexed id);
 
-    // ─── Modifiers ────────────────────────────────────────────────
     modifier onlyPlatform() {
         require(msg.sender == platformOwner, "Unauthorized");
         _;
@@ -56,25 +51,17 @@ contract BountyBoard {
         _;
     }
 
-    // ─── Constructor ──────────────────────────────────────────────
     constructor() {
         platformOwner = msg.sender;
     }
 
-    // ─── Core functions ───────────────────────────────────────────
-
-    /**
-     * @notice Post a new bounty. The reward is locked in the contract.
-     * @param title            Short title (max 80 chars)
-     * @param requirementsHash IPFS CID or doc hash for full requirements
-     */
     function postBounty(
         string calldata title,
         string calldata requirementsHash
     ) external payable returns (uint256 bountyId) {
-        require(msg.value > 0,                    "Reward must be > 0");
-        require(bytes(title).length > 0,          "Title required");
-        require(bytes(title).length <= 80,        "Title too long");
+        require(msg.value > 0,             "Reward must be > 0");
+        require(bytes(title).length > 0,   "Title required");
+        require(bytes(title).length <= 80, "Title too long");
 
         bountyId = bountyCounter++;
 
@@ -92,12 +79,10 @@ contract BountyBoard {
         emit BountyPosted(bountyId, msg.sender, msg.value);
     }
 
-    /**
-     * @notice Hunter claims an open bounty and has 7 days to submit work.
-     */
     function claimBounty(uint256 id) external bountyExists(id) {
         Bounty storage b = bounties[id];
         require(b.status  == BountyStatus.Open, "Bounty not open");
+        // ✅ Düzeltildi: tire yerine düz ASCII
         require(msg.sender != b.poster,         "Poster cannot claim own bounty");
 
         b.hunter    = msg.sender;
@@ -107,17 +92,17 @@ contract BountyBoard {
         emit BountyClaimed(id, msg.sender);
     }
 
-    /**
-     * @notice Hunter submits work proof (IPFS CID or hash).
-     */
     function submitWork(uint256 id, string calldata proofHash)
         external
         bountyExists(id)
     {
         Bounty storage b = bounties[id];
-        require(b.hunter      == msg.sender,             "Not the hunter");
-        require(b.status      == BountyStatus.Claimed,   "Not in claimed state");
-        require(block.timestamp <= b.claimedAt + CLAIM_WINDOW, "Claim window expired");
+        require(b.hunter  == msg.sender,           "Not the hunter");
+        require(b.status  == BountyStatus.Claimed, "Not in claimed state");
+        require(
+            block.timestamp <= b.claimedAt + CLAIM_WINDOW,
+            "Claim window expired"
+        );
 
         b.submittedAt = block.timestamp;
         b.status      = BountyStatus.UnderReview;
@@ -125,25 +110,19 @@ contract BountyBoard {
         emit WorkSubmitted(id, proofHash);
     }
 
-    /**
-     * @notice Poster approves submitted work — hunter receives reward minus platform fee.
-     */
     function approveWork(uint256 id) external bountyExists(id) {
         Bounty storage b = bounties[id];
-        require(b.poster == msg.sender,                   "Not the poster");
-        require(b.status == BountyStatus.UnderReview,     "Not under review");
+        require(b.poster == msg.sender,               "Not the poster");
+        require(b.status == BountyStatus.UnderReview, "Not under review");
 
         _settleBounty(id, true);
     }
 
-    /**
-     * @notice Poster or hunter raises a dispute within 3 days of submission.
-     */
     function raiseDispute(uint256 id) external bountyExists(id) {
         Bounty storage b = bounties[id];
         require(
             msg.sender == b.poster || msg.sender == b.hunter,
-            "Not a party"
+            "Not a party to this bounty"
         );
         require(b.status == BountyStatus.UnderReview, "Not under review");
         require(
@@ -155,10 +134,6 @@ contract BountyBoard {
         emit DisputeRaised(id, msg.sender);
     }
 
-    /**
-     * @notice Platform owner resolves a dispute.
-     * @param hunterWon  true → hunter gets paid; false → poster gets full refund
-     */
     function resolveDispute(uint256 id, bool hunterWon)
         external
         onlyPlatform
@@ -171,13 +146,11 @@ contract BountyBoard {
         _settleBounty(id, hunterWon);
     }
 
-    /**
-     * @notice Poster cancels an unclaimed bounty and gets a full refund.
-     */
     function cancelBounty(uint256 id) external bountyExists(id) {
         Bounty storage b = bounties[id];
-        require(b.poster == msg.sender,         "Not the poster");
-        require(b.status == BountyStatus.Open,  "Cannot cancel — already claimed");
+        require(b.poster == msg.sender,        "Not the poster");
+        // ✅ Düzeltildi: em dash kaldırıldı
+        require(b.status == BountyStatus.Open, "Cannot cancel after claim");
 
         b.status = BountyStatus.Cancelled;
         uint256 refund = b.reward;
@@ -189,9 +162,6 @@ contract BountyBoard {
         require(ok, "Refund failed");
     }
 
-    /**
-     * @notice Platform owner withdraws accumulated fees.
-     */
     function withdrawFees() external onlyPlatform {
         uint256 amount = platformBalance;
         require(amount > 0, "Nothing to withdraw");
@@ -200,8 +170,6 @@ contract BountyBoard {
         (bool ok, ) = payable(platformOwner).call{value: amount}("");
         require(ok, "Withdrawal failed");
     }
-
-    // ─── Internal ─────────────────────────────────────────────────
 
     function _settleBounty(uint256 id, bool payHunter) internal {
         Bounty storage b = bounties[id];
@@ -222,9 +190,6 @@ contract BountyBoard {
         require(ok, "Payment failed");
     }
 
-    // ─── View ─────────────────────────────────────────────────────
-
-    /// @notice Returns seconds remaining in the hunter's submission window.
     function timeLeftToSubmit(uint256 id)
         external
         view
